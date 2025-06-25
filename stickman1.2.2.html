@@ -1,0 +1,1669 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Count Masters: Stickman Games</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            overflow: hidden;
+            user-select: none;
+        }
+
+        #gameContainer {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #gameCanvas {
+            display: block;
+            background: linear-gradient(180deg, #87CEEB 0%, #98FB98 100%);
+            cursor: pointer;
+        }
+
+        #ui {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        #score {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            pointer-events: auto;
+        }
+
+        #stickmanCount {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            background: rgba(0,0,0,0.3);
+            padding: 10px 20px;
+            border-radius: 25px;
+            pointer-events: auto;
+        }
+
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 40px;
+            border-radius: 20px;
+            text-align: center;
+            display: none;
+            pointer-events: auto;
+        }
+
+        #gameOver h2 {
+            font-size: 36px;
+            margin-bottom: 20px;
+            color: #ff6b6b;
+        }
+
+        #gameOver p {
+            font-size: 18px;
+            margin-bottom: 30px;
+        }
+
+        #restartBtn {
+            background: linear-gradient(45deg, #ff6b6b, #ffa500);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 18px;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        #restartBtn:hover {
+            transform: scale(1.05);
+        }
+
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            text-align: center;
+            font-size: 16px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+
+        .particle {
+            position: absolute;
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+
+        .floating {
+            animation: float 2s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui">
+            <div id="score">分数: 0</div>
+            <div id="stickmanCount">👥 1</div>
+            <div id="instructions">
+                点击屏幕移动 | 收集绿色方块增加人数 | 避开红色障碍物
+            </div>
+            <div id="gameOver">
+                <h2>游戏结束!</h2>
+                <p>最终分数: <span id="finalScore">0</span></p>
+                <p>最大人数: <span id="maxCount">0</span></p>
+                <p>波数: <span id="enemywave">0</span></p>
+                <button id="restartBtn">重新开始</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+
+        /**
+         * 主游戏类
+         * 协调所有游戏组件，管理游戏状态和主循环
+         */
+        class CountMastersGame {
+            constructor() {
+                // 初始化画布
+                this.canvas = document.getElementById('gameCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.canvas.width = window.innerWidth;
+                this.canvas.height = window.innerHeight;
+                
+                // 游戏状态
+                this.gameRunning = true;
+                this.score = 0;
+                this.maxStickmanCount = 1;
+                this.gameSpeed = 2;
+                this.basicvalue = 1;
+                this.difficulty = 0.6; // 难度系数(0~1)
+
+                // 输入控制
+                this.keys = {};
+                this.keyboardMoveSpeed = 10;
+                this.targetX = this.canvas.width / 2;
+
+                // 统计数据
+                this.totalCollectedStickmen = 0; // 记录总共收集的火柴人数
+
+                // 初始化游戏管理器
+                this.stickmenManager = new StickmenManager(this);
+                this.enemyManager = new EnemyManager(this);
+                this.collectibleManager = new CollectibleManager(this);
+                this.particleManager = new ParticleManager(this);
+                this.backgroundRenderer = new BackgroundRenderer(this);
+
+                // 设置事件监听器
+                this.setupEventListeners();
+                
+                // 开始游戏循环
+                this.gameLoop();
+            }
+
+            /**
+             * 设置事件监听器
+             */
+            setupEventListeners() {
+                // 鼠标控制
+                this.canvas.addEventListener('mousemove', (e) => {
+                    if (this.gameRunning) {
+                        this.targetX = e.clientX;
+                    }
+                });
+
+                // 触摸控制
+                this.canvas.addEventListener('touchmove', (e) => {
+                    e.preventDefault();
+                    if (this.gameRunning && e.touches[0]) {
+                        this.targetX = e.touches[0].clientX;
+                    }
+                });
+
+                // 键盘控制
+                window.addEventListener('keydown', (e) => {
+                    if (this.gameRunning) {
+                        this.keys[e.key] = true;
+                    }
+                });
+                
+                window.addEventListener('keyup', (e) => {
+                    if (this.gameRunning) {
+                        delete this.keys[e.key];
+                    }
+                });
+
+                // 重新开始按钮
+                document.getElementById('restartBtn').addEventListener('click', () => {
+                    this.restart();
+                });
+
+                // 窗口大小调整
+                window.addEventListener('resize', () => {
+                    this.canvas.width = window.innerWidth;
+                    this.canvas.height = window.innerHeight;
+                });
+            }
+
+            /**
+             * 更新游戏状态
+             */
+            update() {
+                if (this.gameRunning) {
+                    // 键盘输入控制
+                    if (this.keys['ArrowLeft']) {
+                        this.targetX -= this.keyboardMoveSpeed;
+                    }
+                    if (this.keys['ArrowRight']) {
+                        this.targetX += this.keyboardMoveSpeed;
+                    }
+                    this.targetX = Math.max(0, Math.min(this.canvas.width, this.targetX));
+
+                    // 更新各个管理器
+                    this.stickmenManager.updateStickmen(this.targetX);
+                    this.collectibleManager.updateCollectibles();
+                    this.enemyManager.updateEnemies();
+                    this.enemyManager.checkEnemyWave();
+                    this.particleManager.updateParticles();
+                    this.backgroundRenderer.updateRoadAnimation();
+                    
+                    // 更新游戏速度
+                    this.gameSpeed += 0.0001;
+                    
+                    // 检查游戏结束条件
+                    if (this.stickmenManager.getCount() === 0) {
+                        this.gameOver();
+                    }
+                    
+                    // 更新UI
+                    this.updateUI();
+                }
+            }
+
+            /**
+             * 渲染游戏画面
+             */
+            render() {
+                // 清空画布
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+                // 渲染各个组件
+                this.backgroundRenderer.render(this.ctx);
+                this.collectibleManager.render(this.ctx);
+                this.particleManager.render(this.ctx);
+                this.enemyManager.render(this.ctx);
+                this.stickmenManager.render(this.ctx);
+            }
+
+            /**
+             * 更新UI显示
+             */
+            updateUI() {
+                document.getElementById('score').textContent = `分数: ${this.score}`;
+                document.getElementById('stickmanCount').textContent = `👥 ${this.stickmenManager.getCount()}`;
+                this.maxStickmanCount = Math.max(this.maxStickmanCount, this.stickmenManager.getCount());
+            }
+
+            updateScore() {
+                document.getElementById('score').textContent = `分数: ${this.score}`;
+            }
+
+            updateStickmanCount() {
+                document.getElementById('stickmanCount').textContent = `👥 ${this.stickmenManager.getCount()}`;
+            }
+
+            /**
+             * 游戏结束
+             */
+            gameOver() {
+                this.gameRunning = false;
+                document.getElementById('finalScore').textContent = this.score;
+                document.getElementById('maxCount').textContent = this.maxStickmanCount;
+                document.getElementById('enemywave').textContent = this.enemyManager.enemywave;
+                document.getElementById('gameOver').style.display = 'block';
+            }
+
+            //重新开始
+            restart() {
+                // Reset core game state
+                this.gameRunning = true;
+                this.score = 0;
+                this.maxStickmanCount = 1;
+                this.gameSpeed = 2;
+                this.basicvalue = 1;
+                this.keys = {};
+                this.targetX = this.canvas.width / 2;
+                this.totalCollectedStickmen = 0;
+
+                // Reset all managers
+                this.stickmenManager.reset();
+                this.enemyManager.reset();
+                this.collectibleManager.reset();
+                this.particleManager.reset();
+                this.backgroundRenderer.reset();
+
+                // Update UI and hide game over screen
+                this.updateUI();
+                document.getElementById('gameOver').style.display = 'none';
+            }
+
+            gameLoop() {
+                this.update();
+                this.render();
+                requestAnimationFrame(() => this.gameLoop());
+            }
+
+        }
+        
+        /**
+         * 火柴人管理类
+         * 负责管理玩家的火柴人群体
+         */
+        class StickmenManager {
+            constructor(game) {
+                this.game = game; // 游戏主实例的引用
+                this.stickmen = []; // 火柴人数组
+                this.groupCenterX = game.canvas.width / 2; // 群体中心X坐标
+                this.groupCenterY = game.canvas.height - 150; // 群体中心Y坐标
+                this.targetX = game.canvas.width / 2; // 目标X坐标
+                this.maxDisplayCount = 100; // 最大显示数量
+                this.stickmanSize = 0.7; // 火柴人大小
+                
+                this.initStickmen(); // 初始化火柴人
+            }
+
+            /**
+             * 初始化火柴人群体
+             */
+            initStickmen() {
+                this.stickmen.push({
+                    x: this.groupCenterX,
+                    y: this.groupCenterY,
+                    targetX: this.groupCenterX,
+                    targetY: this.groupCenterY,
+                    offsetX: 0,
+                    offsetY: 0,
+                    animationPhase: Math.random() * Math.PI * 2 // 动画相位
+                });
+            }
+
+            /**
+             * 更新火柴人位置和动画
+             */
+            updateStickmen(targetX) {
+                const moveSpeed = 0.1; // 移动速度
+                
+                // 限制目标位置在画布内
+                this.targetX = Math.max(0, Math.min(this.game.canvas.width, targetX));
+
+                // 更新群体中心位置
+                this.groupCenterX += (this.targetX - this.groupCenterX) * moveSpeed;
+
+                // 更新每个火柴人的位置
+                this.stickmen.forEach((stickman, index) => {
+                    // 计算群体中的相对位置（网格排列）
+                    const displayCount = Math.min(this.stickmen.length, this.maxDisplayCount);
+                    const rows = Math.ceil(Math.sqrt(displayCount));
+                    const cols = Math.ceil(displayCount / rows);
+                    const row = Math.floor(index / cols);
+                    const col = index % cols;
+                    
+                    const spacing = 25 * this.stickmanSize;
+                    const offsetX = (col - (cols - 1) / 2) * spacing;
+                    const offsetY = (row - (rows - 1) / 2) * spacing;
+
+                    stickman.targetX = this.groupCenterX + offsetX;
+                    stickman.targetY = this.groupCenterY + offsetY;
+
+                    // 平滑移动到目标位置
+                    stickman.x += (stickman.targetX - stickman.x) * 0.15;
+                    stickman.y += (stickman.targetY - stickman.y) * 0.15;
+
+                    // 动画相位更新
+                    stickman.animationPhase += 0.1;
+                });
+            }
+
+            /**
+             * 添加火柴人
+             */
+            addStickmen(count) {
+                for (let i = 0; i < count; i++) {
+                    this.stickmen.push({
+                        x: this.groupCenterX + (Math.random() - 0.5) * 50,
+                        y: this.groupCenterY + (Math.random() - 0.5) * 50,
+                        targetX: this.groupCenterX,
+                        targetY: this.groupCenterY,
+                        offsetX: 0,
+                        offsetY: 0,
+                        animationPhase: Math.random() * Math.PI * 2
+                    });
+                }
+            }
+
+            /**
+             * 移除火柴人
+             */
+            removeStickmen(count) {
+                for (let i = 0; i < count && this.stickmen.length > 0; i++) {
+                    this.stickmen.pop();
+                }
+            }
+
+            /**
+             * 绘制单个火柴人
+             */
+            drawStickman(ctx, x, y, phase) {
+                ctx.save();
+                ctx.translate(x, y);
+                ctx.scale(this.stickmanSize, this.stickmanSize);
+
+                // 身体摆动
+                const sway = Math.sin(phase) * 2;
+                ctx.rotate(sway * 0.02);
+
+                // 头部
+                ctx.fillStyle = '#FFE4B5';
+                ctx.beginPath();
+                ctx.arc(0, -15, 6, 0, Math.PI * 2);
+                ctx.fill();
+
+                // 身体
+                ctx.strokeStyle = '#8B4513';
+                ctx.lineWidth = 3;
+                ctx.lineCap = 'round';
+                
+                // 躯干
+                ctx.beginPath();
+                ctx.moveTo(0, -9);
+                ctx.lineTo(0, 10);
+                ctx.stroke();
+
+                // 手臂动画
+                const armSwing = Math.sin(phase) * 0.3;
+                ctx.beginPath();
+                ctx.moveTo(0, -2);
+                ctx.lineTo(-8 + armSwing, 5);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(0, -2);
+                ctx.lineTo(8 - armSwing, 5);
+                ctx.stroke();
+
+                // 腿部动画
+                const legSwing = Math.sin(phase + Math.PI) * 0.4;
+                ctx.beginPath();
+                ctx.moveTo(0, 10);
+                ctx.lineTo(-6 + legSwing, 20);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(0, 10);
+                ctx.lineTo(6 - legSwing, 20);
+                ctx.stroke();
+
+                ctx.restore();
+            }
+
+            /**
+             * 绘制所有火柴人
+             */
+            render(ctx) {
+                const stickmenToDraw = this.stickmen.slice(0, this.maxDisplayCount);
+                stickmenToDraw.forEach(stickman => {
+                    this.drawStickman(ctx, stickman.x, stickman.y, stickman.animationPhase);
+                });
+            }
+
+            /**
+             * 获取火柴人数量
+             */
+            getCount() {
+                return this.stickmen.length;
+            }
+
+            /**
+             * 重置火柴人群体
+             */
+            reset() {
+                this.stickmen = [];
+                this.groupCenterX = this.game.canvas.width / 2;
+                this.groupCenterY = this.game.canvas.height - 150;
+                this.targetX = this.game.canvas.width / 2;
+                this.initStickmen();
+            }
+        }
+
+        /**
+         * 敌人管理类
+         * 负责敌人的生成、更新和战斗逻辑
+         */
+        class EnemyManager {
+            constructor(game) {
+                this.game = game; // 游戏主实例的引用
+                this.enemies = []; // 敌人数组
+                this.lastEnemyWave = Date.now(); // 上次敌人波次时间
+                this.enemyWaveInterval = 20000; // 敌人波次间隔（20秒）
+                this.inBattle = false; // 是否在战斗中
+                this.battleStartTime = 0; // 战斗开始时间
+                this.lastDamageTime = 0; // 上次造成伤害时间
+                this.enemywave = 0; // 敌人波次数
+                this.enemywaveflag = true; // 敌人波次标志
+                this.lastenemy = 0; // 上次敌人数量
+                this.maxDisplayCount = 100; // 最大显示数量
+                this.stickmanSize = 0.7; // 敌人大小
+            }
+
+            /**
+             * 检查是否需要生成敌人波次
+             */
+            checkEnemyWave() {
+                const currentTime = Date.now();
+                if (currentTime - this.lastEnemyWave >= this.enemyWaveInterval && 
+                    !this.inBattle && this.enemywaveflag === true) {
+                    this.spawnEnemyWave();
+                    this.lastEnemyWave = currentTime;
+                    this.enemywave += 1;
+                    this.enemywaveflag = false;
+                }
+            }
+
+            /**
+             * 生成敌人波次
+             */
+            spawnEnemyWave() {
+                // 计算敌人数量
+                const maxEnemies = Math.floor(this.game.totalCollectedStickmen * this.game.difficulty - this.lastenemy);
+                const minEnemies = Math.floor(this.game.totalCollectedStickmen * (this.game.difficulty - 0.3) - this.lastenemy);
+                this.lastenemy = maxEnemies;
+
+                const enemyCount = minEnemies > this.enemywave * this.enemywave * this.game.difficulty ? 
+                    Math.floor(Math.random() * (maxEnemies - minEnemies + 1)) + minEnemies : 
+                    Math.floor(Math.random() * this.enemywave + this.enemywave * this.enemywave * this.game.difficulty * 10) + 1;
+
+                // 生成敌人群体
+                const spawnX = Math.random() * (this.game.canvas.width - 200) + 100;
+                const spawnY = -100;
+               
+                for (let i = 0; i < enemyCount; i++) {
+                    this.enemies.push({
+                        x: spawnX + (Math.random() - 0.5) * 100,
+                        y: spawnY + (Math.random() - 0.5) * 50,
+                        targetX: spawnX,
+                        targetY: this.game.canvas.height / 2,
+                        health: 1,
+                        animationPhase: Math.random() * Math.PI * 2,
+                        moveSpeed: 1 + Math.random() * 0.5,
+                        isAlive: true
+                    });
+                }
+
+                // 显示敌人波次警告
+                this.showEnemyWaveWarning(enemyCount);
+            }
+
+            /**
+             * 显示敌人波次警告
+             */
+            showEnemyWaveWarning(enemyCount) {
+                const warning = document.createElement('div');
+                warning.style.cssText = `
+                    position: absolute;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    background: rgba(255, 0, 0, 0.9);
+                    color: white;
+                    padding: 20px 40px;
+                    border-radius: 15px;
+                    font-size: 24px;
+                    font-weight: bold;
+                    z-index: 20;
+                    animation: pulse 0.5s ease-in-out;
+                    pointer-events: none;
+                `;
+                warning.textContent = `敌人来袭! ${enemyCount} 个敌人`;
+
+                document.getElementById('ui').appendChild(warning);
+
+                setTimeout(() => {
+                    if (warning.parentNode) {
+                        warning.parentNode.removeChild(warning);
+                    }
+                }, 3000);
+            }
+
+            /**
+             * 更新敌人状态
+             */
+            updateEnemies() {
+                if (this.getEnemyCount() === 0) {
+                    this.inBattle = false;
+                    return;
+                }
+                
+                // 检查是否开始战斗
+                const playerInRange = this.enemies.some(enemy => {
+                    const distance = Math.sqrt(
+                        Math.pow(enemy.x - this.game.stickmenManager.groupCenterX, 2) + 
+                        Math.pow(enemy.y - this.game.stickmenManager.groupCenterY, 2)
+                    );
+                    return distance < 100;
+                });
+
+                if (playerInRange && !this.inBattle) {
+                    this.inBattle = true;
+                    this.battleStartTime = Date.now();
+                    this.lastDamageTime = Date.now();
+                }
+
+                // 更新每个敌人
+                this.enemies = this.enemies.filter(enemy => {
+                    if (!enemy.isAlive) return false;
+        
+                    // 敌人移动逻辑
+                    if (!this.inBattle) {
+                        // 向玩家群体移动
+                        const dx = this.game.stickmenManager.groupCenterX - enemy.x;
+                        const dy = this.game.stickmenManager.groupCenterY - enemy.y;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+            
+                        if (distance > 5) {
+                            enemy.x += (dx / distance) * enemy.moveSpeed;
+                            enemy.y += (dy / distance) * enemy.moveSpeed;
+                        }
+                    } else {
+                        // 战斗状态：围绕玩家群体
+                        const angle = Math.atan2(enemy.y - this.game.stickmenManager.groupCenterY, 
+                                                 enemy.x - this.game.stickmenManager.groupCenterX);
+                        const targetDistance = 80;
+                        enemy.targetX = this.game.stickmenManager.groupCenterX + Math.cos(angle) * targetDistance;
+                        enemy.targetY = this.game.stickmenManager.groupCenterY + Math.sin(angle) * targetDistance;
+            
+                        enemy.x += (enemy.targetX - enemy.x) * 0.05;
+                        enemy.y += (enemy.targetY - enemy.y) * 0.05;
+                    }
+        
+                    enemy.animationPhase += 0.08;
+                    return true;
+                });
+
+                // 战斗逻辑
+                if (this.inBattle) {
+                    this.processBattle();
+                }
+            }
+
+            /**
+             * 处理战斗逻辑
+             */
+            processBattle() {
+                const currentTime = Date.now();
+                const damageInterval = 1000; // 每秒造成伤害
+
+                if (currentTime - this.lastDamageTime >= damageInterval) { 
+                    this.lastDamageTime = currentTime;
+                    
+                    const stickmenCount = this.game.stickmenManager.getCount();
+                    const enemyCount = this.getEnemyCount();
+
+                    if (stickmenCount > 0 && enemyCount > 0) {
+                        const casualties = Math.min(stickmenCount, enemyCount);
+
+                        // 敌人对玩家造成伤害
+                        this.game.stickmenManager.removeStickmen(casualties);
+                        this.game.particleManager.createParticles(
+                            this.game.stickmenManager.groupCenterX, 
+                            this.game.stickmenManager.groupCenterY, 
+                            '#ff0000'
+                        );
+
+                        // 玩家对敌人造成伤害
+                        const totalParticlesForEnemies = Math.min(casualties, 100);
+                        for (let i = 0; i < casualties; i++) {
+                            if (this.getEnemyCount() > 0) {
+                                const defeatedEnemy = this.enemies.pop();
+                                if (defeatedEnemy) {
+                                    if (i < totalParticlesForEnemies) {
+                                        this.game.particleManager.createParticles(
+                                            defeatedEnemy.x, defeatedEnemy.y, '#ffff00', 1
+                                        );
+                                    }
+                                    this.game.score += 50;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 检查战斗结束条件
+                if (this.getEnemyCount() === 0) {
+                    this.inBattle = false;
+                    this.showBattleResult(true);
+                } else if (this.game.stickmenManager.getCount() === 0) {
+                    this.game.gameOver();
+                }
+            }
+
+            /**
+             * 显示战斗结果
+             */
+            showBattleResult(victory) {
+                const result = document.createElement('div');
+                result.style.cssText = `
+                    position: absolute;
+                    top: 30%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    background: ${victory ? 'rgba(0, 255, 0, 0.9)' : 'rgba(255, 0, 0, 0.9)'};
+                    color: white;
+                    padding: 15px 30px;
+                    border-radius: 10px;
+                    font-size: 20px;
+                    font-weight: bold;
+                    z-index: 20;
+                    pointer-events: none;
+                `;
+                result.textContent = victory ? '胜利!' : '失败!';
+
+                document.getElementById('ui').appendChild(result);
+
+                setTimeout(() => {
+                    if (result.parentNode) {
+                        result.parentNode.removeChild(result);
+                    }
+                }, 2000);
+            }
+
+            /**
+             * 绘制单个敌人
+             */
+            drawEnemy(ctx, x, y, phase) {
+                ctx.save();
+                ctx.translate(x, y);
+                ctx.scale(this.stickmanSize, this.stickmanSize);
+
+                // 敌人身体摆动
+                const sway = Math.sin(phase) * 2;
+                ctx.rotate(sway * 0.02);
+
+                // 头部 (红色表示敌人)
+                ctx.fillStyle = '#FF6B6B';
+                ctx.beginPath();
+                ctx.arc(0, -15, 6, 0, Math.PI * 2);
+                ctx.fill();
+
+                // 身体
+                ctx.strokeStyle = '#8B0000';
+                ctx.lineWidth = 3;
+                ctx.lineCap = 'round';
+
+                // 躯干
+                ctx.beginPath();
+                ctx.moveTo(0, -9);
+                ctx.lineTo(0, 10);
+                ctx.stroke();
+
+                // 手臂动画
+                const armSwing = Math.sin(phase) * 0.3;
+                ctx.beginPath();
+                ctx.moveTo(0, -2);
+                ctx.lineTo(-8 + armSwing, 5);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(0, -2);
+                ctx.lineTo(8 - armSwing, 5);
+                ctx.stroke();
+
+                // 腿部动画
+                const legSwing = Math.sin(phase + Math.PI) * 0.4;
+                ctx.beginPath();
+                ctx.moveTo(0, 10);
+                ctx.lineTo(-6 + legSwing, 20);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(0, 10);
+                ctx.lineTo(6 - legSwing, 20);
+                ctx.stroke();
+
+                ctx.restore();
+            }
+
+            /**
+             * 绘制所有敌人
+             */
+            render(ctx) {
+                const enemiesToDraw = this.enemies.slice(0, this.maxDisplayCount);
+                enemiesToDraw.forEach(enemy => {
+                    this.drawEnemy(ctx, enemy.x, enemy.y, enemy.animationPhase);
+                });
+            }
+
+            /**
+             * 获取敌人数量
+             */
+            getEnemyCount() {
+                return Array.isArray(this.enemies) ? this.enemies.length : 0;
+            }
+
+            /**
+             * 重置敌人管理器
+             */
+            reset() {
+                this.enemies = [];
+                this.lastEnemyWave = Date.now();
+                this.inBattle = false;
+                this.battleStartTime = 0;
+                this.lastDamageTime = 0;
+                this.enemywave = 0;
+                this.enemywaveflag = true;
+                this.lastenemy = 0;
+            }
+        }
+
+        /**
+         * 收集品管理类
+         * 负责管理普通收集品和特殊收集品
+         */
+        class CollectibleManager {
+            constructor(game) {
+                this.game = game; // 游戏主实例的引用
+                this.collectibles = []; // 普通收集品数组
+                this.specialCollectibles = []; // 特殊收集品数组
+                this.obstacles = []; // 障碍物数组
+                
+                // 特殊方块概率控制
+                this.probability = {
+                    blue: 0.10,    // 蓝色方块概率
+                    purple: 0.25,  // 紫色方块概率
+                    normal: 0.75   // 普通方块概率
+                };
+
+                this.startSpawning(); // 开始生成收集品
+            }
+
+            /**
+             * 开始生成游戏对象
+             */
+            startSpawning() {
+                setInterval(() => {
+                    if (!this.game.gameRunning) return;
+
+                    // 根据敌人波次调整难度
+                    if (this.game.enemyManager.enemywaveflag === false) {
+                        this.game.basicvalue = 1.5 * this.game.enemyManager.enemywave + 1;
+                        this.game.gameSpeed += 0.05 * this.game.basicvalue;
+                        
+                        if (this.game.enemyManager.enemywave < 18) {
+                            this.probability.blue -= 0.005;
+                            this.probability.purple -= 0.005;
+                        } else {
+                            this.probability.blue = 0.01;
+                            this.probability.purple = 0.06;
+                        }
+                        this.game.enemyManager.enemywaveflag = true;
+                    }
+
+                    const rand = Math.random();
+            
+                    if (rand < this.probability.blue) {
+                        // 生成蓝色特殊方块
+                        this.spawnSpecialCollectible('blue', 
+                            Math.random() * (this.game.canvas.width - 100) + 50, -50);
+                    } else if (rand < this.probability.blue + this.probability.purple) {
+                        // 生成紫色特殊方块
+                        this.spawnSpecialCollectible('purple', 
+                            Math.random() * (this.game.canvas.width - 100) + 50, -50);
+                    } else {
+                        // 生成普通方块和障碍物
+                        if (Math.random() < 1) {
+                            this.spawnCollectible();
+                        }
+                        
+                        if (Math.random() < 1.2) {
+                            this.spawnObstacle();
+                        }
+                    }
+                }, 1500);
+            }
+
+            /**
+             * 生成普通收集品
+             */
+            spawnCollectible() {
+                this.collectibles.push({
+                    x: Math.random() * (this.game.canvas.width - 100) + 50,
+                    y: -50,
+                    width: 30,
+                    height: 30,
+                    value: Math.floor(Math.random() * (this.game.enemyManager.enemywave + 1) + this.game.basicvalue),
+                    collected: false
+                });
+            }
+
+            /**
+             * 生成障碍物
+             */
+            spawnObstacle() {
+                this.obstacles.push({
+                    x: Math.random() * (this.game.canvas.width - 100) + 50,
+                    y: -50,
+                    width: 40,
+                    height: 40,
+                    damage: Math.floor(Math.random() * (this.game.enemyManager.enemywave + 1) + this.game.basicvalue * 1.2)
+                });
+            }
+
+            /**
+             * 生成特殊收集品
+             */
+            spawnSpecialCollectible(type, x, y) {
+                const specialBlock = {
+                    x: x,
+                    y: y,
+                    width: 35,
+                    height: 35,
+                    type: type, 
+                    collected: false,
+                    rotationAngle: 0,
+                    pulsePhase: Math.random() * Math.PI * 2,
+                    sparkles: [] 
+                };
+
+                // 为特殊方块添加闪烁粒子
+                this.createSparkles(specialBlock);
+                this.specialCollectibles.push(specialBlock);
+            }
+
+            /**
+             * 创建闪烁粒子效果
+             */
+            createSparkles(block) {
+                for (let i = 0; i < 5; i++) {
+                    block.sparkles.push({
+                        x: (Math.random() - 0.5) * 40,
+                        y: (Math.random() - 0.5) * 40,
+                        life: Math.random() * 2 + 1,
+                        maxLife: Math.random() * 2 + 1,
+                        size: Math.random() * 3 + 1
+                    });
+                }
+            }
+
+            /**
+             * 更新所有收集品
+             */
+            updateCollectibles() {
+                this.updateNormalCollectibles();
+                this.updateSpecialCollectibles();
+                this.updateObstacles();
+            }
+
+            /**
+             * 更新普通收集品
+             */
+            updateNormalCollectibles() {
+                this.collectibles = this.collectibles.filter(collectible => {
+                    collectible.y += this.game.gameSpeed;
+
+                    // 检查收集
+                    if (!collectible.collected) {
+                        const stickmenToCheck = this.game.stickmenManager.stickmen.slice(0, 
+                            this.game.stickmenManager.maxDisplayCount);
+                        for (const stickman of stickmenToCheck) {
+                            const distance = Math.sqrt(
+                                Math.pow(stickman.x - collectible.x, 2) + 
+                                Math.pow(stickman.y - collectible.y, 2)
+                            );
+                            
+                            if (distance < 25) {
+                                collectible.collected = true;
+                                this.game.stickmenManager.addStickmen(collectible.value);
+                                this.game.score += collectible.value * 10;
+                                this.game.particleManager.createParticles(collectible.x, collectible.y, '#00ff00');
+                                this.game.totalCollectedStickmen += collectible.value;
+                                break;
+                            }
+                        }
+                    }
+
+                    return collectible.y < this.game.canvas.height + 50 && !collectible.collected;
+                });
+            }
+
+            /**
+             * 更新特殊收集品
+             */
+            updateSpecialCollectibles() {
+                this.specialCollectibles = this.specialCollectibles.filter(block => {
+                    if (block.collected) return false;
+        
+                    block.y += this.game.gameSpeed;
+                    block.rotationAngle += 0.05;
+                    block.pulsePhase += 0.1;
+        
+                    // 更新闪烁粒子
+                    block.sparkles = block.sparkles.filter(sparkle => {
+                        sparkle.life -= 0.02;
+                        sparkle.x += (Math.random() - 0.5) * 0.5;
+                        sparkle.y += (Math.random() - 0.5) * 0.5;
+                        return sparkle.life > 0;
+                    });
+        
+                    // 补充粒子
+                    if (block.sparkles.length < 3) {
+                        block.sparkles.push({
+                            x: (Math.random() - 0.5) * 40,
+                            y: (Math.random() - 0.5) * 40,
+                            life: Math.random() * 2 + 1,
+                            maxLife: Math.random() * 2 + 1,
+                            size: Math.random() * 3 + 1
+                        });
+                    }
+        
+                    // 检查收集
+                    const stickmenToCheck = this.game.stickmenManager.stickmen.slice(0, 
+                        this.game.stickmenManager.maxDisplayCount);
+                    for (const stickman of stickmenToCheck) {
+                        const distance = Math.sqrt(
+                            Math.pow(stickman.x - block.x, 2) + 
+                            Math.pow(stickman.y - block.y, 2)
+                        );
+            
+                        if (distance < 30) {
+                            block.collected = true;
+                            this.collectSpecialBlock(block);
+                            break;
+                        }
+                    }
+       
+                    return block.y < this.game.canvas.height + 50 && !block.collected;
+                });
+            }
+
+            /**
+             * 更新障碍物
+             */
+            updateObstacles() {
+                this.obstacles = this.obstacles.filter(obstacle => {
+                    obstacle.y += this.game.gameSpeed;
+
+                    // 检查碰撞
+                    const stickmenToCheck = this.game.stickmenManager.stickmen.slice(0, 
+                        this.game.stickmenManager.maxDisplayCount);
+                    for (const stickman of stickmenToCheck) {
+                        const distance = Math.sqrt(
+                            Math.pow(stickman.x - obstacle.x, 2) + 
+                            Math.pow(stickman.y - obstacle.y, 2)
+                        );
+                        
+                        if (distance < 25) {
+                            this.game.stickmenManager.removeStickmen(obstacle.damage);
+                            this.game.particleManager.createParticles(obstacle.x, obstacle.y, '#ff0000');
+                            obstacle.y = this.game.canvas.height + 100;
+                            break;
+                        }
+                    }
+
+                    return obstacle.y < this.game.canvas.height + 50;
+                });
+            }
+
+            /**
+             * 收集特殊方块处理
+             */
+            collectSpecialBlock(block) {
+                const currentCount = this.game.stickmenManager.getCount();
+                let multiplier;
+                let effectColor;
+                let effectText;
+
+                if (block.type === 'blue') {
+                    // 蓝色方块：增加人数 1.2-1.5倍
+                    multiplier = 1.2 + Math.random() * 0.3;
+                    effectColor = '#00BFFF';
+                    effectText = `x${multiplier.toFixed(1)}`;
+        
+                    const newCount = Math.floor(currentCount * multiplier);
+                    const addCount = newCount - currentCount;
+                    this.game.stickmenManager.addStickmen(addCount);
+                    this.game.score += addCount * 20;
+        
+                } else if (block.type === 'purple') {
+                    // 紫色方块：减少人数到 0.4-0.7倍
+                    multiplier = 0.4 + Math.random() * 0.3;
+                    effectColor = '#8A2BE2';
+                    effectText = `x${multiplier.toFixed(1)}`;
+        
+                    const newCount = Math.max(1, Math.floor(currentCount * multiplier));
+                    const removeCount = currentCount - newCount;
+                    this.game.stickmenManager.removeStickmen(removeCount);
+                }
+
+                // 创建特殊粒子效果
+                this.game.particleManager.createSpecialParticles(block.x, block.y, effectColor);
+                // 显示倍数效果
+                this.showMultiplierEffect(block.x, block.y, effectText, effectColor);
+            }
+
+            /**
+             * 显示倍数效果文字
+             */
+            showMultiplierEffect(x, y, text, color) {
+                const effect = document.createElement('div');
+                effect.style.cssText = `
+                    position: absolute;
+                    left: ${x}px;
+                    top: ${y}px;
+                    color: ${color};
+                    font-size: 24px;
+                    font-weight: bold;
+                    text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+                    pointer-events: none;
+                    z-index: 15;
+                    animation: floatUp 2s ease-out forwards;
+                `;
+                effect.textContent = text;
+
+                // 添加浮动动画
+                if (!document.getElementById('multiplierAnimation')) {
+                    const style = document.createElement('style');
+                    style.id = 'multiplierAnimation';
+                    style.textContent = `
+                        @keyframes floatUp {
+                            0% { 
+                                transform: translate(-50%, -50%) scale(0.5);
+                                opacity: 0;
+                            }
+                            20% { 
+                                transform: translate(-50%, -50%) scale(1.2);
+                                opacity: 1;
+                            }
+                            100% { 
+                                transform: translate(-50%, -100px) scale(1);
+                                opacity: 0;
+                            }
+                        }
+                    `;
+                    document.head.appendChild(style);
+                }
+
+                document.getElementById('ui').appendChild(effect);
+
+                setTimeout(() => {
+                    if (effect.parentNode) {
+                        effect.parentNode.removeChild(effect);
+                    }
+                }, 2000);
+            }
+
+            /**
+             * 绘制普通收集品
+             */
+            drawNormalCollectibles(ctx) {
+                this.collectibles.forEach(collectible => {
+                    ctx.save();
+                    ctx.translate(collectible.x, collectible.y);
+                    ctx.rotate(Date.now() * 0.005);
+                    
+                    // 发光效果
+                    ctx.shadowColor = '#00ff00';
+                    ctx.shadowBlur = 10;
+                    
+                    ctx.fillStyle = '#00ff00';
+                    ctx.fillRect(-collectible.width/2, -collectible.height/2, 
+                                collectible.width, collectible.height);
+                    
+                    // 显示数值
+                    ctx.shadowBlur = 0;
+                    ctx.fillStyle = 'white';
+                    ctx.font = 'bold 14px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(`+${collectible.value}`, 0, 5);
+                    
+                    ctx.restore();
+                });
+            }
+
+            /**
+             * 绘制障碍物
+             */
+            drawObstacles(ctx) {
+                this.obstacles.forEach(obstacle => {
+                    ctx.save();
+                    ctx.translate(obstacle.x, obstacle.y);
+                    
+                    // 危险发光效果
+                    ctx.shadowColor = '#ff0000';
+                    ctx.shadowBlur = 15;
+                    
+                    ctx.fillStyle = '#ff0000';
+                    ctx.fillRect(-obstacle.width/2, -obstacle.height/2, 
+                                obstacle.width, obstacle.height);
+                    
+                    // 显示伤害值
+                    ctx.shadowBlur = 0;
+                    ctx.fillStyle = 'white';
+                    ctx.font = 'bold 14px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(`-${obstacle.damage.toFixed(0)}`, 0, 5);
+                    
+                    ctx.restore();
+                });
+            }
+
+            /**
+             * 绘制特殊收集品
+             */
+            drawSpecialCollectibles(ctx) {
+                this.specialCollectibles.forEach(block => {
+                    this.drawSpecialCollectible(ctx, block);
+                });
+            }
+
+            /**
+             * 绘制单个特殊收集品
+             */
+            drawSpecialCollectible(ctx, block) {
+                ctx.save();
+                ctx.translate(block.x, block.y);
+                ctx.rotate(block.rotationAngle);
+
+                // 脉冲效果
+                const pulse = 1 + Math.sin(block.pulsePhase) * 0.1;
+                ctx.scale(pulse, pulse);
+
+                // 设置颜色和发光效果
+                let color, shadowColor;
+                if (block.type === 'blue') {
+                    color = '#00BFFF';
+                    shadowColor = '#87CEEB';
+                } else if (block.type === 'purple') {
+                    color = '#8A2BE2';
+                    shadowColor = '#DDA0DD';
+                }
+
+                // 外发光效果
+                ctx.shadowColor = shadowColor;
+                ctx.shadowBlur = 20;
+
+                // 绘制主体
+                ctx.fillStyle = color;
+                ctx.fillRect(-block.width/2, -block.height/2, block.width, block.height);
+
+                // 内部高光
+                ctx.shadowBlur = 0;
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.fillRect(-block.width/2 + 5, -block.height/2 + 5, 
+                             block.width - 10, block.height - 10);
+
+                // 绘制符号
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 16px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+
+                if (block.type === 'blue') {
+                    ctx.fillText('↑', 0, 0);
+                } else if (block.type === 'purple') {
+                    ctx.fillText('↓', 0, 0);
+                }
+
+                ctx.restore();
+
+                // 绘制闪烁粒子
+                block.sparkles.forEach(sparkle => {
+                    ctx.save();
+                    ctx.translate(block.x + sparkle.x, block.y + sparkle.y);
+                    ctx.globalAlpha = sparkle.life / sparkle.maxLife;
+                    ctx.fillStyle = color;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, sparkle.size, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                });
+            }
+
+            /**
+             * 绘制所有收集品
+             */
+            render(ctx) {
+                this.drawNormalCollectibles(ctx);
+                this.drawObstacles(ctx);
+                this.drawSpecialCollectibles(ctx);
+            }
+
+            /**
+             * 重置收集品管理器
+             */
+            reset() {
+                this.collectibles = [];
+                this.specialCollectibles = [];
+                this.obstacles = [];
+                this.probability = {
+                    blue: 0.10,
+                    purple: 0.25,
+                    normal: 0.75
+                };
+            }
+        }
+
+        /**
+         * 粒子效果管理类
+         * 负责各种粒子特效的创建和更新
+         */
+        class ParticleManager {
+            constructor(game) {
+                this.game = game; // 游戏主实例的引用
+                this.particles = []; // 粒子数组
+            }
+
+            /**
+             * 创建普通粒子效果
+             */
+            createParticles(x, y, color, count = 10) {
+                for (let i = 0; i < count; i++) {
+                    this.particles.push({
+                        x: x,
+                        y: y,
+                        vx: (Math.random() - 0.5) * 10,
+                        vy: (Math.random() - 0.5) * 10 - 5,
+                        life: 1,
+                        color: color
+                    });
+                }
+            }
+
+            /**
+             * 创建特殊粒子效果
+             */
+            createSpecialParticles(x, y, color) {
+                for (let i = 0; i < 20; i++) {
+                    this.particles.push({
+                        x: x,
+                        y: y,
+                        vx: (Math.random() - 0.5) * 15,
+                        vy: (Math.random() - 0.5) * 15 - 8,
+                        life: 1.5,
+                        color: color,
+                        size: Math.random() * 4 + 2,
+                        gravity: 0.2
+                    });
+                }
+            }
+
+            /**
+             * 更新所有粒子
+             */
+            updateParticles() {
+                this.particles = this.particles.filter(particle => {
+                    particle.x += particle.vx;
+                    particle.y += particle.vy;
+                    particle.life -= 0.02;
+        
+                    // 添加重力支持
+                    if (particle.gravity) {
+                        particle.vy += particle.gravity;
+                    } else {
+                        particle.vy += 0.1; // 默认重力
+                    }
+        
+                    return particle.life > 0;
+                });
+            }
+
+            /**
+             * 绘制所有粒子
+             */
+            render(ctx) {
+                this.particles.forEach(particle => {
+                    ctx.save();
+                    ctx.globalAlpha = particle.life;
+                    ctx.fillStyle = particle.color;
+                    ctx.beginPath();
+                    const size = particle.size || 3;
+                    ctx.arc(particle.x, particle.y, size, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                });
+            }
+
+            /**
+             * 重置粒子管理器
+             */
+            reset() {
+                this.particles = [];
+            }
+        }
+
+        /**
+         * 背景渲染管理类
+         * 负责游戏背景的绘制和动画
+         */
+        class BackgroundRenderer {
+            constructor(game) {
+                this.game = game; // 游戏主实例的引用
+                this.roadOffset = 0; // 道路偏移量
+                this.roadSpeed = 2; // 道路移动速度
+                this.roadWidth = 1400; // 道路宽度
+                this.laneLineOffset = 0; // 车道线偏移
+                this.roadSideOffset = 0; // 路边装饰偏移
+            }
+
+            /**
+             * 更新道路动画效果
+             */
+            updateRoadAnimation() {
+                // 根据游戏速度更新道路偏移
+                this.roadOffset += this.game.gameSpeed;
+                this.laneLineOffset += this.game.gameSpeed * 0.5; // 车道线移动更慢
+                this.roadSideOffset += this.game.gameSpeed; // 路边物体移动
+
+                // 重置偏移以避免数值过大
+                if (this.laneLineOffset > 35) {
+                    this.laneLineOffset = 0;
+                }
+                if (this.roadSideOffset > 200) {
+                    this.roadSideOffset = 0;
+                }
+            }
+
+            /**
+             * 绘制完整背景
+             */
+            render(ctx) {
+                this.drawRoadBackground(ctx);
+            }
+
+            /**
+             * 绘制道路背景
+             */
+            drawRoadBackground(ctx) {
+                const canvas = this.game.canvas;
+
+                // 绘制天空/远景
+                const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                gradient.addColorStop(0, '#87CEEB');    // 天蓝色
+                gradient.addColorStop(0.3, '#98D8E8'); // 浅蓝色
+                gradient.addColorStop(0.7, '#90EE90'); // 浅绿色（远山）
+                gradient.addColorStop(1, '#228B22');   // 深绿色（近景）
+
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // 绘制远山轮廓
+                this.drawMountains(ctx);
+
+                // 绘制道路
+                this.drawRoad(ctx);
+
+                // 绘制路边装饰
+                this.drawRoadSide(ctx);
+
+                // 绘制车道线
+                this.drawLaneLines(ctx);
+            }
+
+            /**
+             * 绘制远山
+             */
+            drawMountains(ctx) {
+                const canvas = this.game.canvas;
+
+                ctx.fillStyle = 'rgba(105, 105, 105, 0.6)'; // 灰色山脉
+                ctx.beginPath();
+
+                // 绘制山脉轮廓
+                const mountainPoints = [
+                    {x: 0, y: canvas.height * 0.4},
+                    {x: canvas.width * 0.2, y: canvas.height * 0.3},
+                    {x: canvas.width * 0.4, y: canvas.height * 0.35},
+                    {x: canvas.width * 0.6, y: canvas.height * 0.25},
+                    {x: canvas.width * 0.8, y: canvas.height * 0.32},
+                    {x: canvas.width, y: canvas.height * 0.38},
+                    {x: canvas.width, y: canvas.height * 0.7},
+                    {x: 0, y: canvas.height * 0.7}
+                ];
+
+                ctx.moveTo(mountainPoints[0].x, mountainPoints[0].y);
+                mountainPoints.forEach(point => {
+                    ctx.lineTo(point.x, point.y);
+                });
+                ctx.closePath();
+                ctx.fill();
+            }
+
+            /**
+             * 绘制主道路
+             */
+            drawRoad(ctx) {
+                const canvas = this.game.canvas;
+
+                // 计算道路的透视效果
+                const roadTop = canvas.height * 0.4;      // 道路顶部（远处）
+                const roadBottom = canvas.height;         // 道路底部（近处）
+                const roadTopWidth = this.roadWidth * 0.8; // 远处道路宽度
+                const roadBottomWidth = this.roadWidth;    // 近处道路宽度
+
+                // 道路主体
+                const roadGradient = ctx.createLinearGradient(0, roadTop, 0, roadBottom);
+                roadGradient.addColorStop(0, '#696969');  // 远处较暗
+                roadGradient.addColorStop(1, '#808080');  // 近处较亮
+
+                ctx.fillStyle = roadGradient;
+                ctx.beginPath();
+                ctx.moveTo(canvas.width/2 - roadTopWidth/2, roadTop);
+                ctx.lineTo(canvas.width/2 + roadTopWidth/2, roadTop);
+                ctx.lineTo(canvas.width/2 + roadBottomWidth/2, roadBottom);
+                ctx.lineTo(canvas.width/2 - roadBottomWidth/2, roadBottom);
+                ctx.closePath();
+                ctx.fill();
+
+                // 道路边缘阴影
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+                ctx.beginPath();
+                ctx.moveTo(canvas.width/2 - roadBottomWidth/2, roadBottom);
+                ctx.lineTo(canvas.width/2 - roadBottomWidth/2 + 10, roadBottom);
+                ctx.lineTo(canvas.width/2 - roadTopWidth/2 + 5, roadTop);
+                ctx.lineTo(canvas.width/2 - roadTopWidth/2, roadTop);
+                ctx.closePath();
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.moveTo(canvas.width/2 + roadBottomWidth/2, roadBottom);
+                ctx.lineTo(canvas.width/2 + roadBottomWidth/2 - 10, roadBottom);
+                ctx.lineTo(canvas.width/2 + roadTopWidth/2 - 5, roadTop);
+                ctx.lineTo(canvas.width/2 + roadTopWidth/2, roadTop);
+                ctx.closePath();
+                ctx.fill();
+            }
+
+            /**
+             * 绘制车道线
+             */
+            drawLaneLines(ctx) {
+                const canvas = this.game.canvas;
+
+                const roadTop = canvas.height * 0.4;
+                const roadBottom = canvas.height;
+                const roadTopWidth = this.roadWidth * 0.3;
+                const roadBottomWidth = this.roadWidth;
+
+                // 中央分隔线
+                ctx.strokeStyle = '#FFFF00'; // 黄色
+                ctx.lineWidth = 3;
+                ctx.setLineDash([20, 15]);
+                ctx.lineDashOffset = this.laneLineOffset;
+
+                ctx.beginPath();
+                ctx.moveTo(canvas.width/2, roadTop);
+                ctx.lineTo(canvas.width/2, roadBottom);
+                ctx.stroke();
+
+                // 边线（实线）
+                ctx.strokeStyle = '#FFFFFF'; // 白色
+                ctx.lineWidth = 2;
+                ctx.setLineDash([]);
+
+                // 左边线
+                ctx.beginPath();
+                ctx.moveTo(canvas.width/2 - roadTopWidth/2, roadTop);
+                ctx.lineTo(canvas.width/2 - roadBottomWidth/2, roadBottom);
+                ctx.stroke();
+
+                // 右边线
+                ctx.beginPath();
+                ctx.moveTo(canvas.width/2 + roadTopWidth/2, roadTop);
+                ctx.lineTo(canvas.width/2 + roadBottomWidth/2, roadBottom);
+                ctx.stroke();
+            }
+
+            /**
+             * 绘制路边装饰
+             */
+            drawRoadSide(ctx) {
+                const canvas = this.game.canvas;
+
+                const roadTop = canvas.height * 0.4;
+                const roadBottom = canvas.height;
+                const roadTopWidth = this.roadWidth * 0.3;
+                const roadBottomWidth = this.roadWidth;
+                
+                // 路边草地
+                ctx.fillStyle = '#CCFFCC'; // 草绿色
+                
+                // 左侧草地
+                ctx.beginPath();
+                ctx.moveTo(0, roadTop);
+                ctx.lineTo(canvas.width/2 - roadTopWidth/2, roadTop);
+                ctx.lineTo(canvas.width/2 - roadBottomWidth/2, roadBottom);
+                ctx.lineTo(0, roadBottom);
+                ctx.closePath();
+                ctx.fill();
+                
+                // 右侧草地
+                ctx.beginPath();
+                ctx.moveTo(canvas.width, roadTop);
+                ctx.lineTo(canvas.width/2 + roadTopWidth/2, roadTop);
+                ctx.lineTo(canvas.width/2 + roadBottomWidth/2, roadBottom);
+                ctx.lineTo(canvas.width, roadBottom);
+                ctx.closePath();
+                ctx.fill();
+            }
+
+            /**
+             * 重置背景渲染器
+             */
+            reset() {
+                this.roadOffset = 0;
+                this.laneLineOffset = 0;
+                this.roadSideOffset = 0;
+            }
+        }
+
+
+        window.addEventListener('load', () => {
+            new CountMastersGame();
+        });
+    </script>
+</body>
+</html>
+
